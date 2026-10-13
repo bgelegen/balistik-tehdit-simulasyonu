@@ -424,7 +424,12 @@ const Sim = {
         const txt = c.model === 'rule' ? `${LABEL_TR[lab]}, kural: ${c.why}` : lab === 'SAHTE' ? `SAHTE, ${SUB_TR[c.best]}` : lab === 'GERCEK' ? `GERÇEK, P=%${Math.round(c.p.rv * 100)}` : 'BİLİNMEYEN, Isolation Forest aykırı buldu';
         this.say(`${o.tid} yeniden sınıflandı → ${txt}${why}.`, lab === 'GERCEK' ? 'warn' : lab === 'BILINMEYEN' ? 'event' : 'info');
       }
-      if (this.t - o.predT >= 2 || !o.pred) { o.pred = predictImpact(o, betaGuess(o)); o.predT = this.t; }
+      // düşme noktası 2 s'de bir yenilenir; izler iki gruba ayrılarak yük radar turlarına eşit dağıtılır (karelerde ani yük birikmez)
+      if (!o.pred || this.t - o.predT >= 2) {
+        const first = !o.pred;
+        o.pred = predictImpact(o, betaGuess(o));
+        o.predT = first ? this.t - (parseInt(o.tid.slice(2), 10) % 2) : this.t;
+      }
       else o.pred.t = Math.max(0, o.pred.t - 1);
       o.score = threatScore(o, this.assets);
     }

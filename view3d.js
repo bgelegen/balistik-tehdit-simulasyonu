@@ -4,13 +4,14 @@
    görünürlük için büyütülür ve HUD bunu belirtir. Dünya, tesisler ve hedefler kurgusaldır. */
 const View3D = (() => {
   const K = 1e-3, MS = 1e-6, MINPX = 14, MAXP = 3600;
+  let pipR = null, pipGl = null; const pipSz = new THREE.Vector2();
   let ok = false, host, renderer, composer = null, bloom = null, scene, camera, pipCam, hudCv, hud, W = 1, H = 1, dpr = 1;
   let U, Wd, Nn, sunDir, earthMat, clouds, halo, rim, stars, sunSpr, dome, padF, batF, padG = null, bat = null;
   let envelope = null, beams = null, fcBeams = null, radarW = null;
   let missileM = null, busM = null, busEntry = null, fair = null, lastNoz = null, lastSimT = 0, maxExag = 1, mTrail = null;
   let userMode = 'auto', curKey = 'pad', tA, tB, tC, Yax;
   const models = new Map(), lines = new Map(), smoke = [], glow = [], flashes = [], seenFx = new WeakSet();
-  let smokeIdx = 0, glowIdx = 0, scaled = [];
+  let smokeIdx = 0, glowIdx = 0, scaled = [], smokeB = null, glowB = null;
   const ctl = { az: 0, el: 0, zoom: 1, drag: null };
   const cs = { key: '', blend: 1, fromTR: null, fromPR: null, curT: null, tgtS: null, dS: 0, fov: 45, init: false };
   const pip = { on: false, w: 1, h: 1 };
@@ -53,15 +54,11 @@ const View3D = (() => {
     sunSpr = Models3D.sprite(0xfff1d6); sunSpr.position.copy(sunDir).multiplyScalar(600); sunSpr.scale.set(30, 30, 1); scene.add(sunSpr);
     stars = makeStars(); scene.add(stars);
 
-    for (let i = 0; i < 1800; i++) {
-      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: Models3D.smokeTex, color: 0xe9e5dd, transparent: true, depthWrite: false }));
-      s.visible = false; scene.add(s);
-      smoke.push({ s, vel: new THREE.Vector3(), age: 0, life: 1, s0: 1, s1: 1, a: 1, drag: 0, alive: false });
-    }
-    for (let i = 0; i < 700; i++) {
-      const s = Models3D.sprite(0xffb070); s.visible = false; scene.add(s);
-      glow.push({ s, vel: new THREE.Vector3(), age: 0, life: 1, px0: 4, px1: 1, alive: false });
-    }
+    // duman ve kıvılcımlar: her biri ayrı sprite yerine tek çizim çağrısıyla çizilen toplu parçacık katmanları
+    for (let i = 0; i < 1800; i++) smoke.push({ s: particleState(0xe9e5dd), vel: new THREE.Vector3(), age: 0, life: 1, s0: 1, s1: 1, a: 1, drag: 0, alive: false });
+    for (let i = 0; i < 700; i++) glow.push({ s: particleState(0xffb070), vel: new THREE.Vector3(), age: 0, life: 1, px0: 4, px1: 1, alive: false });
+    smokeB = particleBatch(smoke.length, Models3D.smokeTex, THREE.NormalBlending, true, true); scene.add(smokeB.mesh);
+    glowB = particleBatch(glow.length, Models3D.glowTex, THREE.AdditiveBlending, false, false); scene.add(glowB.mesh);
     // radar ışınları: izleme (camgöbeği) ve atış kontrol (kehribar)
     const segs = (col, op) => {
       const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(80 * 6), 3)); g.setDrawRange(0, 0);
@@ -199,7 +196,10 @@ void main(){
       new THREE.MeshBasicMaterial({ color: 0x46c8d8, wireframe: true, transparent: true, opacity: 0.035, depthWrite: false, fog: false }));
     envelope.quaternion.copy(bat.g.quaternion); envelope.position.copy(batF.o); envelope.visible = false; scene.add(envelope);
     missileM = Models3D.missile(); scene.add(missileM.g);
-    cs.init = false; cs.key = '';
+    cs.init = false; cs.key = ''; cs.blend = 1; cs.fromTR = cs.fromPR = null;
+    // HSS görüntüsünün ayrı çizicisi sahne kurulurken bir kez çizdirilir: gölgelendirici derleme ve doku yükleme
+    // radar adımında ilk açılışta takılmaya yol açmaz
+    if (pipR) { try { placePip(); pipR.setSize(320, 200, false); pipR.render(scene, pipCam); } catch (e) { /* yalnızca ön ısıtma */ } }
   }
 
   function orient(g, dir) { g.quaternion.setFromUnitVectors(Yax, dir); }
@@ -255,17 +255,23 @@ void main(){
     const d = camera.position.distanceTo(pos), px = lenM * MS / (2 * d * Math.tan(camera.fov * Math.PI / 360)) * H;
     return px < MINPX ? Math.min(MINPX / Math.max(px, 1e-12), 3e5) : 1;
   }
+  // füzenin sahnedeki konumu (kamera ve model aynı kareyi kullanır; rampadaki yükseklik payı kalkışta yumuşakça sönümlenir)
+  function missilePos(sim, out) {
+    const M = sim.missile;
+    if (!M) return out.copy(padF.o).addScaledVector(padF.up, 2.7 * MS);
+    toV(M.x, M.y, M.z, out);
+    return out.addScaledVector(padF.up, 2.7 * MS * clamp(1 - M.h / 0.3, 0, 1));
+  }
   function syncMissile(sim, dtSim) {
     const M = sim.missile, onPad = sim.phase === 'ready';
     if (!missileM) return;
     if (!M && !onPad) { missileM.g.visible = false; return; }
     missileM.g.visible = true;
-    if (onPad) { missileM.g.position.copy(padF.o).addScaledVector(padF.up, 2.7 * MS); orient(missileM.g, padF.up); tB.copy(padF.up); }
+    missilePos(sim, missileM.g.position);
+    if (onPad) { orient(missileM.g, padF.up); tB.copy(padF.up); }
     else {
-      toV(M.x, M.y, M.z, missileM.g.position);
       if (M.v > 0.02) dirV(M, tB); else tB.copy(padF.up);
       orient(missileM.g, tB);
-      if (M.h < 0.3) missileM.g.position.addScaledVector(padF.up, 2.7 * MS);
     }
     missileM.s1.visible = !M || M.stage === 1;
     missileM.plume.position.y = (!M || M.stage === 1) ? -1.1 : 10.2;
@@ -340,6 +346,68 @@ void main(){
   }
 
   /* ---------- parçacıklar ---------- */
+  // parçacık durumu: eski sprite alanlarıyla aynı (konum, ölçek, görünürlük, renk, dönme, opaklık)
+  function particleState(hex) {
+    return { position: new THREE.Vector3(), scale: new THREE.Vector3(1, 1, 1), visible: false, material: { color: new THREE.Color(hex), rotation: 0, opacity: 0 } };
+  }
+  const PV = `attribute vec3 iOff; attribute vec2 iSR; attribute vec4 iCol;
+    varying vec2 vUv; varying vec4 vCol;
+    #include <common>
+    #include <fog_pars_vertex>
+    #include <logdepthbuf_pars_vertex>
+    void main() {
+      vUv = uv; vCol = iCol;
+      vec4 mvPosition = modelViewMatrix * vec4(iOff, 1.0);
+      float c = cos(iSR.y), sn = sin(iSR.y); vec2 q = position.xy * iSR.x;
+      mvPosition.xy += vec2(c * q.x - sn * q.y, sn * q.x + c * q.y);
+      gl_Position = projectionMatrix * mvPosition;
+      #include <logdepthbuf_vertex>
+      #include <fog_vertex>
+    }`;
+  const PF = `uniform sampler2D map; varying vec2 vUv; varying vec4 vCol;
+    #include <common>
+    #include <fog_pars_fragment>
+    #include <logdepthbuf_pars_fragment>
+    void main() {
+      #include <logdepthbuf_fragment>
+      vec4 t = texture2D(map, vUv);
+      gl_FragColor = vec4(vCol.rgb * t.rgb, vCol.a * t.a);
+      #include <fog_fragment>
+    }`;
+  // konumlar kameraya göreli yazılır (mesh kameranın konumunda): büyük dünya koordinatlarında float32 hassasiyet kaybı olmaz
+  function particleBatch(max, tex, blending, fog, sort) {
+    const g = new THREE.InstancedBufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0], 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+    g.setIndex([0, 1, 2, 0, 2, 3]);
+    const mk = n => new THREE.InstancedBufferAttribute(new Float32Array(max * n), n).setUsage(THREE.DynamicDrawUsage);
+    const off = mk(3), sr = mk(2), col = mk(4);
+    g.setAttribute('iOff', off); g.setAttribute('iSR', sr); g.setAttribute('iCol', col); g.instanceCount = 0;
+    const mat = new THREE.ShaderMaterial({ uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { map: { value: null } }]),
+      vertexShader: PV, fragmentShader: PF, transparent: true, depthWrite: false, blending, fog });
+    mat.uniforms.map.value = tex;
+    const mesh = new THREE.Mesh(g, mat); mesh.frustumCulled = false; mesh.visible = false;
+    const list = [];
+    return {
+      mesh,
+      prepare(ps, cam) {
+        const o = cam.position; list.length = 0;
+        for (const p of ps) if (p.alive && p.s.visible && p.s.material.opacity > 0.002) list.push(p);
+        if (sort) { for (const p of list) p.d = p.s.position.distanceToSquared(o); list.sort((a, b) => b.d - a.d); }
+        const A = off.array, B = sr.array, C = col.array;
+        for (let n = 0; n < list.length; n++) {
+          const s = list[n].s, P = s.position, c = s.material.color;
+          A[n * 3] = P.x - o.x; A[n * 3 + 1] = P.y - o.y; A[n * 3 + 2] = P.z - o.z;
+          B[n * 2] = s.scale.x; B[n * 2 + 1] = s.material.rotation;
+          C[n * 4] = c.r; C[n * 4 + 1] = c.g; C[n * 4 + 2] = c.b; C[n * 4 + 3] = s.material.opacity;
+        }
+        const n = list.length; g.instanceCount = n; mesh.visible = n > 0; mesh.position.copy(o);
+        off.updateRange.count = n * 3; sr.updateRange.count = n * 2; col.updateRange.count = n * 4;
+        off.needsUpdate = sr.needsUpdate = col.needsUpdate = true;
+      },
+    };
+  }
+  function prepParticles(cam) { if (smokeB) { smokeB.prepare(smoke, cam); glowB.prepare(glow, cam); } }
   function rnd3(s) { return new THREE.Vector3((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s); }
   function puff(pos, vel, s0, s1, life, a, drag = 0.2, color = 0xe9e5dd) {
     const p = smoke[smokeIdx]; smokeIdx = (smokeIdx + 1) % smoke.length;
@@ -438,7 +506,7 @@ void main(){
   function localAxes(pos, dir) {
     const upL = pos.clone().normalize();
     const side = new THREE.Vector3().crossVectors(dir, upL);
-    if (side.lengthSq() < 0.01) side.copy(Nn); else side.normalize();
+    if (side.lengthSq() < 0.01) side.copy(Nn).negate(); else side.normalize();
     return { upL, side };
   }
   function preset(sim, key) {
@@ -452,7 +520,7 @@ void main(){
         P.up.copy(padF.up); P.fov = 44; break;
       case 'track': {
         const cam = padF.o.clone().addScaledVector(padF.side, m(1700)).addScaledVector(padF.fwd, m(-900)).addScaledVector(padF.up, m(12));
-        if (missileM && missileM.g.visible) P.tgt.copy(missileM.g.position); else P.tgt.copy(padF.o);
+        if (sim.missile || sim.phase === 'ready') missilePos(sim, P.tgt); else P.tgt.copy(padF.o);
         P.off.subVectors(cam, P.tgt); P.up.copy(padF.up);
         P.fov = clamp(2 * Math.atan(48 / (P.off.length() / MS)) * 180 / Math.PI, 0.8, 40); break;
       }
@@ -536,9 +604,12 @@ void main(){
     if (P.smoothDist) { cs.dS += (off.length() - cs.dS) * (1 - Math.exp(-dtR * 1.5)); off.setLength(cs.dS); }
     cs.blend = Math.min(1, cs.blend + dtR / 1.8);
     let T = tgt, Pp;
+    if (cs.blend < 1 && (!cs.fromTR || !cs.fromPR)) cs.blend = 1;   // geçiş başlangıç durumu yoksa doğrudan kesme
     if (cs.blend < 1) {
       const e = cs.blend * cs.blend * (3 - 2 * cs.blend);
-      T = tgt.clone().addScaledVector(cs.fromTR, 1 - e);
+      // bakış noktası yeni hedefe konumdan daha hızlı döner: geçiş boyunca hedef kadrajda kalır
+      const ba = Math.min(1, cs.blend * 2.5), ea = ba * ba * (3 - 2 * ba);
+      T = tgt.clone().addScaledVector(cs.fromTR, 1 - ea);
       const l0 = Math.max(cs.fromPR.length(), 1e-9), l1 = Math.max(off.length(), 1e-9);
       const dir = cs.fromPR.clone().divideScalar(l0).lerp(off.clone().divideScalar(l1), e).normalize();
       Pp = tgt.clone().addScaledVector(dir, Math.exp(Math.log(l0) + (Math.log(l1) - Math.log(l0)) * e));
@@ -797,25 +868,47 @@ void main(){
     if (pip.on) {
       updateSky(pipCam);
       scaleAll(pipCam, pip.h, false);
-      renderer.setScissorTest(true); renderer.setViewport(0, 0, pip.w, pip.h); renderer.setScissor(0, 0, pip.w, pip.h);
-      renderer.render(scene, pipCam);
-      renderer.setScissorTest(false); renderer.setViewport(0, 0, W, H);
-      const src = renderer.domElement, pr = renderer.getPixelRatio(), dw = Math.round(pip.w * dpr), dh = Math.round(pip.h * dpr);
+      prepParticles(pipCam);
+      const dw = Math.round(pip.w * dpr), dh = Math.round(pip.h * dpr);
       if (pipCv.width !== dw || pipCv.height !== dh) { pipCv.width = dw; pipCv.height = dh; }
       pctx.setTransform(1, 0, 0, 1, 0, 0);
-      pctx.drawImage(src, 0, src.height - Math.round(pip.h * pr), Math.round(pip.w * pr), Math.round(pip.h * pr), 0, 0, dw, dh);
+      if (pipR) {
+        if (pipR.getPixelRatio() !== dpr) pipR.setPixelRatio(dpr);
+        const sz = pipR.getSize(pipSz); if (sz.x !== pip.w || sz.y !== pip.h) pipR.setSize(pip.w, pip.h, false);
+        pipR.render(scene, pipCam);
+        pctx.clearRect(0, 0, dw, dh);
+      } else {
+        renderer.setScissorTest(true); renderer.setViewport(0, 0, pip.w, pip.h); renderer.setScissor(0, 0, pip.w, pip.h);
+        renderer.render(scene, pipCam);
+        renderer.setScissorTest(false); renderer.setViewport(0, 0, W, H);
+        const src = renderer.domElement, pr = renderer.getPixelRatio();
+        pctx.drawImage(src, 0, src.height - Math.round(pip.h * pr), Math.round(pip.w * pr), Math.round(pip.h * pr), 0, 0, dw, dh);
+      }
       drawPipLabels(sim);
     }
     // ana görünüm
     updateSky(camera);
     scaleAll(camera, H, true);
+    prepParticles(camera);
     if (composer) composer.render(); else renderer.render(scene, camera);
     drawHUD(sim, opt, now);
   }
   function missileTrail(sim) { if (sim.missile) mTrail = sim.missile.trail; return mTrail || []; }
 
   function setMode(m) { userMode = m; ctl.az = ctl.el = 0; ctl.zoom = 1; }
-  function setPipCanvas(cv) { pipCv = cv; pctx = cv.getContext('2d'); }
+  // HSS canlı görüntüsü kendi küçük WebGL tuvaline çizilir; ana tuvalden kopyalama (GPU'yu bekleten okuma) gerekmez.
+  // Etiketler üstteki 2B tuvale çizilir.
+  function setPipCanvas(cv) {
+    pipCv = cv; pctx = cv.getContext('2d');
+    if (!ok || pipR) return;
+    try {
+      const wrap = document.createElement('div'); wrap.className = 'pipwrap';
+      cv.parentNode.insertBefore(wrap, cv); wrap.appendChild(cv);
+      pipGl = document.createElement('canvas'); pipGl.className = 'pipgl'; wrap.prepend(pipGl);
+      pipR = new THREE.WebGLRenderer({ canvas: pipGl, antialias: true, logarithmicDepthBuffer: true });
+      pipR.setPixelRatio(dpr); cv.classList.add('pipover');
+    } catch (e) { pipR = null; if (pipGl) pipGl.remove(); pipGl = null; }
+  }
   function camKey() { return curKey; }
 
   return { init, reset, render, setMode, setPipCanvas, camKey };
