@@ -1,0 +1,163 @@
+<meta charset="utf-8">
+<title>Hedef Ayırt Etme Simülatörü</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Chakra+Petch:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <h1>Hedef Ayırt Etme Simülatörü</h1>
+        <p>MRV / MIRV sahte hedef sınıflandırma ve tehdit önceliklendirme</p>
+      </div>
+    </div>
+    <ol class="stepper" id="stepper" aria-label="Simülasyon adımları"></ol>
+    <div class="clock"><span id="clock">T+00:00</span><span id="speedLbl">hazır</span></div>
+  </header>
+
+  <aside class="story">
+    <section class="card stepcard">
+      <div class="kicker" id="stepNo">Adım 1 / 10</div>
+      <h2 id="stepTitle">Fırlatmaya hazır</h2>
+      <p class="lead" id="stepLead"></p>
+      <h3>Ekranda ne görüyorsunuz</h3>
+      <ul id="stepLook"></ul>
+      <div class="why"><b>Ayırt etme açısından</b><p id="stepWhy"></p></div>
+      <div class="ctrls">
+        <button id="btnPlay" class="primary">Fırlat</button>
+        <button id="btnSkip">Adımı atla</button>
+        <button id="btnReset">Baştan</button>
+      </div>
+      <div class="opts">
+        <label class="check"><input type="checkbox" id="stepwise"><span>Her adımın başında dur<em>Kapalıysa simülasyon kesintisiz akar</em></span></label>
+        <div class="field">
+          <label for="mult" class="lbl">Oynatma hızı <output id="multO">1×</output></label>
+          <input type="range" id="mult" min="0" max="4" step="1" value="2">
+        </div>
+        <label class="check"><input type="checkbox" id="truth"><span>Gerçek kimlikleri göster<em>Radar adımlarında renkler gerçek türü gösterir</em></span></label>
+      </div>
+    </section>
+
+    <details class="card setup" id="setup" open>
+      <summary>Senaryo ayarları</summary>
+      <fieldset id="scen">
+        <div class="field">
+          <span class="lbl">Sistem tipi</span>
+          <div class="seg" role="radiogroup" aria-label="Sistem tipi">
+            <label><input type="radio" name="mode" value="MRV" id="mMRV"><span>MRV</span></label>
+            <label><input type="radio" name="mode" value="MIRV" id="mMIRV" checked><span>MIRV</span></label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="nrv" class="lbl">Harp başlığı sayısı <output id="nrvO">4</output></label>
+          <input type="range" id="nrv" min="2" max="6" value="4">
+        </div>
+        <div class="field">
+          <span class="lbl">Sahte hedef yoğunluğu</span>
+          <div class="seg" role="radiogroup" aria-label="Sahte hedef yoğunluğu">
+            <label><input type="radio" name="density" value="low" id="dLow"><span>Düşük</span></label>
+            <label><input type="radio" name="density" value="mid" id="dMid" checked><span>Orta</span></label>
+            <label><input type="radio" name="density" value="high" id="dHigh"><span>Yüksek</span></label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="range" class="lbl">Menzil</label>
+          <select id="range">
+            <option value="3000" selected>3.000 km · orta menzil</option>
+            <option value="5500">5.500 km · kıtalararası alt sınır</option>
+            <option value="8000">8.000 km · kıtalararası</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="icpt" class="lbl">Önleyici stoğu <output id="icptO">10</output></label>
+          <input type="range" id="icpt" min="4" max="20" value="10">
+        </div>
+        <div class="field">
+          <span class="lbl">Karar modeli</span>
+          <div class="seg" role="radiogroup" aria-label="Karar modeli">
+            <label><input type="radio" name="model" value="ml" id="mML" checked><span>Yapay zekâ</span></label>
+            <label><input type="radio" name="model" value="rule" id="mRule"><span>Kural tabanlı</span></label>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="unk" checked><span>Bilinmeyen tip nesne ekle<em>Açık küme testi: eğitimde olmayan imza</em></span></label>
+      </fieldset>
+      <p class="hint" id="setupHint">Ayarlar yalnızca fırlatmadan önce değiştirilebilir.</p>
+    </details>
+
+    <details class="card about">
+      <summary>Model hakkında</summary>
+      <ul>
+        <li><b>Dinamik:</b> iki cisim yerçekimi ve US Standard Atmosphere 1976 yoğunluğuyla sürükleme. Sürükleme ivmesi <code>q / β</code>.</li>
+        <li><b>Ölçüm:</b> Swerling türü dalgalanan radar kesit alanı, dönme/presesyon (mikro-Doppler), hareket düzenliliği, kızılötesi soğuma. β, atmosferdeki yavaşlamadan <b>Kalman filtresiyle</b> kestirilir.</li>
+        <li><b>Yapay zekâ:</b> gradyan artırmalı karar ağaçları (LightGBM ile aynı yöntem ailesi) sayfa açılışında sentetik izlerle eğitilir; olasılıklar <b>izotonik regresyonla</b> kalibre edilir; <b>Isolation Forest</b> aykırı imzaları “bilinmeyen” sayar. Karar eşiği gerçek başlıkların %95’ini yakalayacak şekilde seçilir.</li>
+        <li id="mlInfo"></li>
+        <li><b>Kural tabanlı kıyas:</b> β (atmosferde) ve RKA eşikleriyle karar verir; önceliklendirme yalnızca çarpmaya kalan süreye göre yapılır.</li>
+        <li><b>Önceliklendirme:</b> <code>T = 100 × P × K × U</code>: kalibre gerçek başlık olasılığı × düşme noktasının kritikliği × aciliyet. Her radar turunda (1 s) skorlar yeniden hesaplanır ve önleyiciler en yüksek skordan başlanarak atanır (ateşle-gözle-ateşle).</li>
+        <li><b>Angajman:</b> 120 km yeniden giriş arayüzünde başlar. Dört rampa, önleyici hızı 4,5 km/s, tek atış vuruş olasılığı 0,85.</li>
+      </ul>
+      <p>İmza değerleri temsilîdir, hiçbir gerçek sisteme ait değildir. Dünya, tesisler ve hedef isimleri kurgusaldır. Uzak görünümlerde nesneler görünürlük için büyütülür.</p>
+    </details>
+  </aside>
+
+  <main class="stage">
+    <section class="view" id="v3d">
+      <div class="vhead"><span>3B · Sinematik görünüm</span><span class="vsub">sürükle: döndür · tekerlek: yakınlaştır · çift tık: sıfırla</span></div>
+      <div class="vbtns" data-view="3d">
+        <button data-m="auto" class="on">Otomatik</button>
+        <button data-m="focus">Takip</button>
+        <button data-m="defense">Savunma</button>
+        <button data-m="globe">Küre</button>
+      </div>
+      <div class="captions" id="captions" aria-live="polite"></div>
+      <div class="cue" id="cue" hidden>
+        <span class="cue-k" id="cueK">Sıradaki adım</span>
+        <b id="cueT"></b>
+        <button id="cueBtn" class="primary">▶ Oynat</button>
+      </div>
+      <div class="v3d-load">Dünya dokusu oluşturuluyor…</div>
+    </section>
+    <section class="view" id="v2d">
+      <canvas id="c2d" aria-label="2B yörünge haritası"></canvas>
+      <div class="vhead"><span>2B · Yörünge haritası</span><span class="vsub">menzil–irtifa, gerçek ölçek</span></div>
+      <div class="vbtns" data-view="2d">
+        <button data-m="auto" class="on">Otomatik</button>
+        <button data-m="launch">Fırlatma</button>
+        <button data-m="full">Tüm yörünge</button>
+        <button data-m="defense">Savunma</button>
+      </div>
+    </section>
+  </main>
+
+  <aside class="ctx">
+    <section class="card hsscam" id="hssCard" hidden>
+      <h2>HSS bataryası · canlı görüntü <span class="sub" id="hssSub"></span></h2>
+      <canvas id="hssCv" aria-label="HSS bataryası canlı görüntü"></canvas>
+      <p class="hint">Fırlatıcılar (F1–F4) ve üzerlerinde kalan önleyici sayısı. Önleyiciler kanisterlerden duman bırakarak kalkar.</p>
+    </section>
+    <section class="card" id="ctxMain"></section>
+    <section class="card" id="ctxDetail" hidden></section>
+    <section class="card logc">
+      <h2>Olaylar</h2>
+      <ol id="log"></ol>
+    </section>
+  </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+<script src="sim.js"></script>
+<script src="ml.js"></script>
+<script src="models3d.js"></script>
+<script src="view2d.js"></script>
+<script src="view3d.js"></script>
+<script src="guide.js"></script>
+<script src="panels.js"></script>
+<script src="app.js"></script>
